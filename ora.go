@@ -13,7 +13,7 @@ import (
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal/errchan"
 	"github.com/influxdata/telegraf/plugins/inputs"
-	"gopkg.in/rana/ora.v4"
+	ora "gopkg.in/rana/ora.v4"
 )
 
 type Ora struct {
@@ -45,6 +45,7 @@ var sampleConfig = `
   ## for example:
   url = "perfstat/perfstat@localhost:1521/orcl"
   ## specify measure the associated SQLs files
+  ## SQL file Content format:  SQL-name::SQL-Statement;;
   files = ["default.sql"]
   ## additional labels, override tag in SQL.
   dbid = "orcl"
@@ -56,55 +57,6 @@ func (o *Ora) Description() string {
 
 func (o *Ora) SampleConfig() string {
 	return sampleConfig
-}
-
-func (o *Ora) getURL() {
-	user := `([a-zA-z]+)`
-	pass := `([a-zA-z]+)?`
-	ip := `((?:(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))`
-	port := `([0-9]+)?`
-	service := `([a-zA-Z0-9]+)?`
-	instance := `([a-zA-Z0-9]+)?`
-
-	re := user + "/?" + pass + "@" + ip + ":" + port + "/?" + service + "/?" + instance
-	r := regexp.MustCompile(re)
-
-	matches := r.FindStringSubmatch(o.Url)
-
-	o.u = &url{
-		all:      matches[0],
-		user:     matches[1],
-		passwd:   matches[2],
-		host:     matches[3],
-		port:     matches[4],
-		service:  matches[5],
-		instance: matches[6],
-	}
-}
-
-func (o *Ora) readfiles() error {
-	var errChan = errchan.New(len(o.Files))
-
-	for _, file := range o.Files {
-		bs, err := ioutil.ReadFile(file)
-		if err != nil {
-			errChan.C <- err
-			continue
-		}
-
-		rs := strings.Split(string(bs), ";")
-		for _, r := range rs {
-			fs := strings.Split(r, ":")
-			if fs == nil || len(fs) != 2 {
-				continue
-			}
-
-			k := strings.TrimSpace(fs[0])
-			o.sqlmap[k] = append(o.sqlmap[k], fs[1])
-		}
-	}
-
-	return errChan.Error()
 }
 
 func (o *Ora) Gather(acc telegraf.Accumulator) error {
@@ -124,7 +76,7 @@ func (o *Ora) Gather(acc telegraf.Accumulator) error {
 	defer conn.Close()
 
 	//生成URL标签
-	o.getURL()
+	o.tagUrl()
 
 	var ln int
 	for _, v := range o.sqlmap {
@@ -233,6 +185,73 @@ func (o *Ora) parseRow(rowData map[string]*interface{}) (map[string]string, map[
 	}
 
 	return tags, fields, err
+}
+
+func (o *Ora) tagUrl() {
+	user := `([a-zA-z]+)`
+	pass := `([a-zA-z]+)?`
+	ip := `((?:(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))`
+	port := `([0-9]+)?`
+	service := `([a-zA-Z0-9]+)?`
+	instance := `([a-zA-Z0-9]+)?`
+
+	re := user + "/?" + pass + "@" + ip + ":" + port + "/?" + service + "/?" + instance
+	r := regexp.MustCompile(re)
+
+	matches := r.FindStringSubmatch(o.Url)
+
+	o.u = &url{
+		all:      matches[0],
+		user:     matches[1],
+		passwd:   matches[2],
+		host:     matches[3],
+		port:     matches[4],
+		service:  matches[5],
+		instance: matches[6],
+	}
+}
+
+func (o *Ora) readfiles() error {
+	var errChan = errchan.New(len(o.Files))
+
+	for _, file := range o.Files {
+		bs, err := ioutil.ReadFile(file)
+		if err != nil {
+			errChan.C <- err
+			continue
+		}
+
+		rs := strings.Split(string(bs), ";;")
+
+		for _, r := range rs {
+			if len(strings.TrimSpace(r)) == 0 {
+				continue
+			}
+
+			fs := strings.Split(r, "::")
+			if fs == nil || len(fs) != 2 {
+				log.Printf("I! SQL `%s` format error", r)
+				continue
+			}
+
+			k := strings.TrimSpace(fs[0])
+			v := strings.TrimSpace(fs[1])
+			if len(k) == 0 || len(v) == 0 {
+				continue
+			}
+
+			o.sqlmap[k] = append(o.sqlmap[k], v)
+		}
+	}
+
+	//注释条目
+	for k, _ := range o.sqlmap {
+		if strings.HasPrefix(k, "#") {
+			delete(o.sqlmap, k)
+		}
+	}
+
+	return errChan.Error()
 }
 
 func init() {
