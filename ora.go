@@ -19,7 +19,6 @@ import (
 type Ora struct {
 	Url   string   `toml:"url"`
 	Files []string `toml:"files"`
-	Dbid  string   `toml:"dbid"`
 
 	sync.Mutex
 	sqlmap map[string][]string
@@ -37,18 +36,18 @@ type url struct {
 }
 
 var sampleConfig = `
-  ## specify OCI connection URL
-  ## URL are separated into multiple tags(orahost,oraport,oraservice,orainstance)
-  ## see - http://docs.oracle.com/database/121/NETAG/naming.htm#NETAG255
+  ## 指定ORACLE数据库连接URL
+  ## 注：
+  ##    1. 插件会将指定url分离出orahost,oraport,oraservice,orainstance多个标签。
+  ##    2. URL标准参见网址：http://docs.oracle.com/database/121/NETAG/naming.htm#NETAG255
+  ## 示例：
   ##   [user][/password][@]host:port/oracle_service_name[:pooled]
   ##   [user][/password][@]host:port/oracle_service_name[:pooled] as sysdba 
-  ## for example:
   url = "perfstat/perfstat@localhost:1521/orcl"
-  ## specify measure the associated SQLs files
-  ## SQL file Content format:  SQL-name::SQL-Statement;;
+  ## 指定需要采集生成度量值的SQL语句文件
+  ## 文件内容的格式要求  SQL-name::SQL-Statement;;
+  ## SQL-name是#号开头表示忽略此条SQL。 
   files = ["default.sql"]
-  ## additional labels, override tag in SQL.
-  dbid = "orcl"
 `
 
 func (o *Ora) Description() string {
@@ -159,11 +158,6 @@ func (o *Ora) parseRow(rowData map[string]*interface{}) (map[string]string, map[
 			tags[k] = fmt.Sprintf("%b", val)
 		default:
 			log.Printf("I! parseRow column=%s type %T not support", k, val)
-		}
-
-		//添加DBID标签
-		if len(strings.TrimSpace(o.Dbid)) > 0 {
-			tags["dbid"] = o.Dbid
 		}
 
 		//添加URL生成标签
