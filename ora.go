@@ -106,7 +106,7 @@ func (o *Ora) gatherInfo(acc telegraf.Accumulator, conn *sql.DB, tag string, sta
 
 	rowset, err := conn.Query(sta)
 	if err != nil {
-		return fmt.Errorf("ora gatherInfo %s error , %s", tag, err)
+		return fmt.Errorf("ora gatherInfo host=%s instance=%s tag=%s error , %s", o.u.host, o.u.instance, tag, err)
 	}
 
 	colNames, err := rowset.Columns()
@@ -117,11 +117,11 @@ func (o *Ora) gatherInfo(acc telegraf.Accumulator, conn *sql.DB, tag string, sta
 
 	for rowset.Next() {
 		if err := rowset.Scan(rowVars...); err != nil {
-			return fmt.Errorf("ora gatherInfo %s Scan error , %s", tag, err)
+			return fmt.Errorf("ora gatherInfo host=%s instance=%s tag=%s Scan error , %s", o.u.host, o.u.instance, tag, err)
 		}
 		tags, fields, err := o.parseRow(rowData)
 		if err != nil {
-			return fmt.Errorf("ora gatherInfo %s parseRow error , %s", tag, err)
+			return fmt.Errorf("ora gatherInfo host=%s instance=%s tag=%s parseRow error , %s", o.u.host, o.u.instance, tag, err)
 		}
 
 		tags["func"] = tag
