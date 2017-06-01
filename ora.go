@@ -182,6 +182,12 @@ func (o *Ora) parseRow(rowData map[string]*interface{}) (map[string]string, map[
 }
 
 func (o *Ora) tagUrl() {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Fatalf("E! tagUrl %s error %v", o.Url, p)
+		}
+	}()
+
 	user := `([a-zA-z]+)`
 	pass := `([a-zA-z]+)?`
 	ip := `((?:(?:[0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9]))`
