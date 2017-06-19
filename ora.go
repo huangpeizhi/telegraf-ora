@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/influxdata/telegraf"
 	"github.com/influxdata/telegraf/internal/errchan"
@@ -17,8 +18,9 @@ import (
 )
 
 type Ora struct {
-	Url   string   `toml:"url"`
-	Files []string `toml:"files"`
+	Url        string   `toml:"url"`
+	Files      []string `toml:"files"`
+	SqlSeconds int64    `toml:"sqlseconds"`
 
 	sync.Mutex
 	sqlmap map[string][]string
@@ -48,6 +50,8 @@ var sampleConfig = `
   ## 文件内容的格式要求  SQL-name::SQL-Statement;;
   ## SQL-name是#号开头表示忽略此条SQL。 
   files = ["default.sql"]
+  ## SQL-file中每条SQL执行的最大秒数
+  sqlseconds = 30
 `
 
 func (o *Ora) Description() string {
@@ -82,16 +86,21 @@ func (o *Ora) Gather(acc telegraf.Accumulator) error {
 		ln = ln + len(v)
 	}
 
-	var wg sync.WaitGroup
 	errChan := errchan.New(ln)
+	var wg sync.WaitGroup
+
 	for tag, ss := range o.sqlmap {
 		for _, s := range ss {
 			wg.Add(1)
-
 			go func(conn *sql.DB, tag string, s string) {
 				defer wg.Done()
 
-				errChan.C <- o.gatherInfo(acc, conn, tag, s)
+				select {
+				case <-time.After(time.Duration(o.SqlSeconds) * time.Second):
+					errChan.C <- fmt.Errorf("ora gather host=%s instance=%s tag=%s timeout", o.u.host, o.u.instance, tag)
+				case errChan.C <- o.gatherInfo(acc, conn, tag, s):
+				}
+
 			}(conn, tag, s)
 		}
 	}
@@ -119,6 +128,7 @@ func (o *Ora) gatherInfo(acc telegraf.Accumulator, conn *sql.DB, tag string, sta
 		if err := rowset.Scan(rowVars...); err != nil {
 			return fmt.Errorf("ora gatherInfo host=%s instance=%s tag=%s Scan error , %s", o.u.host, o.u.instance, tag, err)
 		}
+
 		tags, fields, err := o.parseRow(rowData)
 		if err != nil {
 			return fmt.Errorf("ora gatherInfo host=%s instance=%s tag=%s parseRow error , %s", o.u.host, o.u.instance, tag, err)
