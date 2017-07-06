@@ -1,6 +1,7 @@
 package ora
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"io/ioutil"
@@ -17,16 +18,18 @@ import (
 	ora "gopkg.in/rana/ora.v4"
 )
 
+//ora插件结构
 type Ora struct {
 	Url        string   `toml:"url"`
-	Files      []string `toml:"files"`
-	SqlSeconds int64    `toml:"sqlseconds"`
+	Files      []string `toml:"files"`      //SQL文件
+	SqlSeconds int64    `toml:"sqlseconds"` //单条SQL执行时间阀值
 
 	sync.Mutex
 	sqlmap map[string][]string
-	u      *url
+	u      *url //解析后的数据库URL
 }
 
+//数据库连接串结构
 type url struct {
 	all      string
 	user     string
@@ -51,17 +54,20 @@ var sampleConfig = `
   ## SQL-name是#号开头表示忽略此条SQL。 
   files = ["default.sql"]
   ## SQL-file中每条SQL执行的最大秒数
-  sqlseconds = 30
+  sqlseconds = 10
 `
 
+//说明
 func (o *Ora) Description() string {
 	return "Read metrics from one Oracle Databases."
 }
 
+//示例输出
 func (o *Ora) SampleConfig() string {
 	return sampleConfig
 }
 
+//采集
 func (o *Ora) Gather(acc telegraf.Accumulator) error {
 	o.Lock()
 	defer o.Unlock()
@@ -87,16 +93,17 @@ func (o *Ora) Gather(acc telegraf.Accumulator) error {
 	}
 
 	errChan := errchan.New(ln)
-	var wg sync.WaitGroup
 
+	var wg sync.WaitGroup
 	for tag, ss := range o.sqlmap {
 		for _, s := range ss {
 			wg.Add(1)
 			go func(conn *sql.DB, tag string, s string) {
 				defer wg.Done()
 
+				ctx, _ := context.WithTimeout(context.Background(), time.Duration(o.SqlSeconds)*time.Second)
 				select {
-				case <-time.After(time.Duration(o.SqlSeconds) * time.Second):
+				case <-ctx.Done():
 					errChan.C <- fmt.Errorf("ora gather host=%s instance=%s tag=%s timeout", o.u.host, o.u.instance, tag)
 				case errChan.C <- o.gatherInfo(acc, conn, tag, s):
 				}
@@ -191,7 +198,51 @@ func (o *Ora) parseRow(rowData map[string]*interface{}) (map[string]string, map[
 	return tags, fields, err
 }
 
+//解析url
+// - user/password@host:port/service/instance
 func (o *Ora) tagUrl() {
+	s1 := strings.Split(o.Url, "@")
+	if len(s1) != 2 {
+		log.Fatalf("E! tagUrl url=%s config error", o.Url)
+	}
+
+	s1_0 := strings.Split(s1[0], "/")
+	if len(s1_0) != 2 {
+		log.Fatalf("E! tagUrl url=%s %s config error", o.Url, s1[0])
+	}
+
+	user := s1_0[0]
+	passwd := s1_0[1]
+
+	s1_1 := strings.Split(s1[1], ":")
+	if len(s1_1) != 2 {
+		log.Fatalf("E! tagUrl url=%s %s config error", o.Url, s1[1])
+	}
+
+	host := s1_1[0]
+
+	s1_1_1 := strings.Split(s1_1[1], "/")
+	if len(s1_1_1) != 3 {
+		log.Fatalf("E! tagUrl url=%s %s config error", o.Url, s1_1[1])
+	}
+
+	port := s1_1_1[0]
+	service := s1_1_1[1]
+	instance := s1_1_1[2]
+
+	o.u = &url{
+		all:      o.Url,
+		user:     user,
+		passwd:   passwd,
+		host:     host,
+		port:     port,
+		service:  service,
+		instance: instance,
+	}
+}
+
+//已不使用
+func (o *Ora) tagUrl2() {
 	defer func() {
 		if p := recover(); p != nil {
 			log.Fatalf("E! tagUrl %s error %v", o.Url, p)
